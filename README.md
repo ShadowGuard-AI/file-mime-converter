@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # file-mime-converter
 Converts files between different MIME types using common conversion tools (e.g., using 'unoconv' for document formats), handling dependencies and reporting errors. - Focused on File operations and analysis
 
