@@ -4,6 +4,18 @@ import subprocess
 import pathlib
 import mimetypes
 import os
+import sys
+
+MIME_TO_FORMAT = {
+    'application/pdf': 'pdf',
+    'text/plain': 'txt',
+    'text/html': 'html',
+    'application/vnd.oasis.opendocument.text': 'odt',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/msword': 'doc',
+    'text/csv': 'csv',
+    'application/rtf': 'rtf',
+}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -13,7 +25,7 @@ def setup_argparse():
     """
     Sets up the argument parser for the command-line interface.
     """
-    parser = argparse.ArgumentParser(description='Converts files between different MIME types.')
+    parser = argparse.ArgumentParser(description='Converts files between different MIME types. Exits 1 on any failure: a missing or empty input, an output path that resolves to the input file, a target MIME type that disagrees with the output suffix, a missing format, a converter failure, or a converter that produces no non-empty output file.')
     parser.add_argument('input_file', type=str, help='The input file to convert.')
     parser.add_argument('output_file', type=str, help='The output file to save the conversion to.')
     parser.add_argument('--target_mime', type=str, help='The target MIME type for the conversion. If not specified, tries to infer from output file extension.')
@@ -42,15 +54,42 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
             logging.error(f"Input file not found: {input_file}")
             return False
 
-        # Determine the output format from the file extension if target_mime is not provided
-        if not target_mime:
-            output_extension = pathlib.Path(output_file).suffix.lstrip('.')  # Remove leading dot
-            target_mime = mimetypes.guess_type(output_file)[0]
+        if input_path.stat().st_size == 0:
+            logging.error(f"Input file is empty: {input_file}. Refusing to convert an empty input.")
+            print("Input file is empty. Refusing to convert it.")
+            return False
 
+        # Refuse an output path that resolves to the input file itself.
+        if pathlib.Path(output_file).resolve() == input_path.resolve():
+            logging.error("Output path resolves to the input file. Refusing to convert a file over itself.")
+            return False
+
+        output_format = pathlib.Path(output_file).suffix.lstrip('.').lower()
+
+        # A supplied target MIME type decides the format through the map.
+        if target_mime:
+            mapped_format = MIME_TO_FORMAT.get(target_mime.strip().lower())
+            if not mapped_format:
+                logging.error(f"Unsupported target MIME type: {target_mime}. Supported types: {', '.join(sorted(MIME_TO_FORMAT))}.")
+                return False
+            if output_format and output_format != mapped_format:
+                logging.error(f"Target MIME type {target_mime} maps to format '{mapped_format}', which disagrees with the output suffix '{output_format}'. Refusing.")
+                return False
+            output_format = mapped_format
+            logging.info(f"Target MIME type {target_mime} mapped to format: {output_format}")
+        else:
+            if not output_format:
+                logging.error("Could not determine a conversion format: no --target_mime was given and the output file has no suffix. Please specify --target_mime.")
+                return False
+            target_mime = mimetypes.guess_type(output_file)[0]
             if not target_mime:
-                logging.error(f"Could not infer target MIME type from output file extension: {output_extension}.  Please specify --target_mime.")
+                logging.error(f"Could not infer target MIME type from output file extension: {output_format}.  Please specify --target_mime.")
                 return False
             logging.info(f"Inferred target MIME type: {target_mime}")
+
+        if not output_format:
+            logging.error("Could not determine a conversion format from --target_mime or the output suffix.")
+            return False
 
         # Security best practice:  Sanitize input and output file names
         input_file = str(input_path.resolve()) # Get absolute path to prevent relative path vulnerabilities
@@ -59,7 +98,7 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
         # Construct the unoconv command
         command = [
             unoconv_path,
-            '-f', str(pathlib.Path(output_file).suffix).lstrip('.'),  # Format is the file suffix
+            '-f', output_format,
             '-o', output_file,
             input_file
         ]
@@ -74,6 +113,11 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
             logging.error(f"Conversion failed with return code {process.returncode}")
             logging.error(f"Stdout: {stdout.decode()}")
             logging.error(f"Stderr: {stderr.decode()}")
+            return False
+
+        output_path = pathlib.Path(output_file)
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            logging.error(f"Converter exited 0 but produced no non-empty output file at: {output_file}")
             return False
 
         logging.info(f"Conversion successful. Output file: {output_file}")
@@ -101,6 +145,7 @@ def main():
         print(f"File successfully converted to {args.output_file}")
     else:
         print("File conversion failed.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
