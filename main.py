@@ -67,6 +67,11 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
         output_format = pathlib.Path(output_file).suffix.lstrip('.').lower()
 
         # A supplied target MIME type decides the format through the map.
+        # Two ways to decide the format, and they are not symmetric. A supplied
+        # MIME type must exist in the eight entry map and must agree with the
+        # output suffix. With no MIME type, the suffix alone decides, and the
+        # inferred MIME type is only logged: a suffix outside the map, such as
+        # png, is passed to unoconv as a format and fails at the converter.
         if target_mime:
             mapped_format = MIME_TO_FORMAT.get(target_mime.strip().lower())
             if not mapped_format:
@@ -92,6 +97,10 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
             return False
 
         # Security best practice:  Sanitize input and output file names
+        # Both paths are resolved to absolutes before the subprocess runs, so
+        # the converter's working directory cannot change which files the
+        # relative spellings meant. The command itself is an argv list, so no
+        # path is ever shell interpreted.
         input_file = str(input_path.resolve()) # Get absolute path to prevent relative path vulnerabilities
         output_file = str(pathlib.Path(output_file).resolve())
 
@@ -116,6 +125,9 @@ def convert_file(input_file, output_file, target_mime, unoconv_path):
             return False
 
         output_path = pathlib.Path(output_file)
+        # A zero exit code from unoconv is not taken as proof. The output has
+        # to exist and be non-empty, because a converter that quietly writes
+        # nothing would otherwise be reported as a successful conversion.
         if not output_path.is_file() or output_path.stat().st_size == 0:
             logging.error(f"Converter exited 0 but produced no non-empty output file at: {output_file}")
             return False
